@@ -1,0 +1,60 @@
+var aoi = ee.FeatureCollection('projects/ee-muddasir-shah/assets/islamabad');
+Map.centerObject(aoi)
+Map.addLayer(aoi.style({color:'red', fillColor:'#FFFFFF00'}),{},'Islamabad.')
+
+var startDate = '2016-05-01';
+var endDate = '2016-12-31';
+var cloud_cover = 10;
+var s2_l1c = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+          .filterBounds(aoi)
+          .filterDate(startDate,endDate)
+          .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',cloud_cover))
+print(s2_l1c,'Filtered L1C')
+
+// Calling SIAC for atmoshperic correction
+var siac = require('users/marcyinfeng/utils:SIAC');
+var list = s2_l1c.map(function(img){
+  var image_date = ee.Date(img.get('system:time_start')).format('YYYY-MM-dd')
+  return ee.Feature(null,{'dateofImage':image_date})
+})
+print(list,'A Feature Collection with dates of tiles')
+
+var list = list.aggregate_array('dateofImage').distinct()
+print(list,'No Duplicate Dates List')
+
+list.evaluate(function(l){
+  print(l,'List Async.') //will apply client side operation (for loop)
+  
+  for (var i=0; i<l.length;i++){
+
+    var startDate = ee.Date(l[i])
+    var endDate = startDate.advance({delta:1, unit:'day'}) //adjust according to your dataset
+    var image = s2_l1c.filterBounds(aoi).filterDate(startDate,endDate)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',cloud_cover))
+                .map(function(img){
+                  return siac.get_sur(img).copyProperties(img,['system:time_start'])})
+                .mosaic()
+                
+    var image_with_bands = image.select('B.*')
+    Map.addLayer(image_with_bands.clip(aoi),{bands:['B4','B3','B2']},'Corrected '+l[i],false)
+    // print(image_with_bands)
+    
+    // EXport to assets
+    Export.image.toAsset({
+      image:image_with_bands.multiply(10000).clip(aoi), 
+      description:'S2_SR_'+l[i], 
+      region:aoi, 
+      scale:10,
+      maxPixels:1e13})
+      
+    // Export to GDrive
+    // Export.image.toDrive({
+    //   image:image_with_bands.multiply(10000).clip(aoi),
+    //   description:'S2_SR_'+l[i], 
+    //   folder:"Sentinel2SR", 
+    //   region:aoi, 
+    //   scale:10, 
+    //   maxPixels:1e13, 
+    //   skipEmptyTiles:true, })
+    
+}})
