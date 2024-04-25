@@ -1,4 +1,5 @@
 // Resampling a band and finding resolution of a band or image in Google Earth Engine
+
 var image = ee.Image('COPERNICUS/S2_SR_HARMONIZED/20220304T055741_20220304T055736_T42RWV');
 Map.addLayer(image,{min:0,max:8000, gamma:2, bands:['B4','B3','B2']},'Image');
 Map.centerObject(image);
