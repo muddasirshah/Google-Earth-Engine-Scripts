@@ -1,0 +1,100 @@
+
+var aoi = ee.FeatureCollection('projects/ee-muddasir-shah/assets/islamabad');
+var sentinel2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED");
+
+//Define dates and cloud cover
+var start = '2021-01-01';
+var end = '2021-02-01';
+var cloud_cover = 10;
+//Filter
+var filtered = sentinel2.filterBounds(aoi)
+                        .filterDate(start,end)
+                        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',cloud_cover))
+print(filtered,'Filtered Collection Sentinel 2')
+
+
+//Aggregating Tiles (We will aggregate day wise for sentinel 2)
+//For that we need to create a unique dates (days) list from the...
+//...Filtered Image Collection
+
+var list = filtered.map(function(img){
+  var image_date = ee.Date(img.get('system:time_start')).format('YYYY-MM-dd')
+  return ee.Feature(null,{'dateofImage':image_date})
+})
+print(list,'A Feature Collection with dates of tiles')
+
+//Generating Unique Dates List (remove the duplicates)
+
+var list = list.aggregate_array('dateofImage').distinct()
+print(list,'No Duplicate Dates List')
+
+//Generating an image collection with same date tiles mosaiced
+list.evaluate(function(l){
+  print(l,'List Async.') //will apply client side operation (for loop)
+  
+  for (var i=0; i<l.length;i++){
+    //print(l[i])
+    
+    var startDate = ee.Date(l[i])
+    var endDate = startDate.advance({delta:1, unit:'day'}) //adjust according to your dataset
+    var image = sentinel2.filterBounds(aoi).filterDate(startDate,endDate)
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',cloud_cover))
+                .mosaic()
+    var ndvi = image.normalizedDifference(['B8','B4']).rename('NDVI');
+    //Scale the Image (convert to float)
+    var imageWithNDVI = image.multiply(0.0001).addBands(ndvi);
+    
+    //Lets perform cloud masking as well
+    var SCL = imageWithNDVI.select('SCL');
+    var cloudShadow = SCL.eq(0.0003) //It should be 3 but since we have scaled the bands
+    var cloudLow = SCL.eq(0.0007)
+    var cloudMedium = SCL.eq(0.0008)
+    var cloudHigh = SCL.eq(0.0009)
+    var cloudCirrus = SCL.eq(0.0010)
+    
+    var cloud_mask = cloudShadow.add(cloudLow).add(cloudMedium).add(cloudHigh).add(cloudCirrus);
+    
+    //converting to a uniary mask
+    var cloud_uni = cloud_mask.eq(0).selfMask()
+    
+    //Masking the Image (eliminating cloudy pixels)
+    var imageWithNDVI_masked = imageWithNDVI.updateMask(cloud_uni)
+    
+    //Lets Visualize All the Same date tiles that are mosaiced
+    Map.addLayer(imageWithNDVI_masked.clip(aoi),{min:0.025,max:0.25,bands:['B4','B3','B2']},l[i],false);
+    
+    //Lets Export the Images (image collection)
+    
+    Export.image.toDrive({
+      image: imageWithNDVI_masked.clip(aoi).select(['B8','B4','B3','B2']), //or export all bands 
+      description:'Sentinel2_Batch_'+l[i], 
+      folder:'batch_download', 
+      region:aoi, 
+      scale:10, 
+      maxPixels:1e13, })
+      
+    //Lets also reclassify the image and display on map
+  var ndvi = imageWithNDVI_masked.select('NDVI')
+  var reclassified = (ndvi
+                    .where(ndvi.lte(0.3),1) //class 1
+                    .where(ndvi.gt(0.3),2) //class 2
+                    ).rename('Reclassified')
+  Map.addLayer(reclassified,{min:1,max:2,palette:['red','green']},'Reclassified NDVI'+l[i])                  
+    
+  //For Loop Ends    
+  }
+  
+  //Evaluate Ends
+})
+
+
+
+
+
+
+
+
+
+
+
+
